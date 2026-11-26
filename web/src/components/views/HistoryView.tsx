@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { History, Sparkles, ExternalLink, Copy, Trash2, Calendar, Music, ArrowRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -11,31 +11,28 @@ interface HistoryItem {
   createdAt: string;
 }
 
-export function HistoryView({ onNavigateHome }: { onNavigateHome?: () => void }) {
-  const [history, setHistory] = useState<HistoryItem[]>([]);
+// Item de exemplo que versões antigas gravavam no histórico de todo usuário novo
+const LEGACY_SAMPLE_ID = '10WHdIDfS38Af4jNfzRrUR';
 
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem('spg_history');
-      if (stored) {
-        setHistory(JSON.parse(stored));
-      } else {
-        // Pre-popula com a playlist que geramos hoje caso esteja vazio
-        const initialItem: HistoryItem = {
-          id: '10WHdIDfS38Af4jNfzRrUR',
-          name: 'SPG: rock anos 2000 nostalgia',
-          prompt: 'rock anos 2000 nostalgia',
-          url: 'https://open.spotify.com/playlist/10WHdIDfS38Af4jNfzRrUR',
-          trackCount: 15,
-          createdAt: new Date().toISOString()
-        };
-        setHistory([initialItem]);
-        localStorage.setItem('spg_history', JSON.stringify([initialItem]));
-      }
-    } catch (e) {
-      console.error('Erro ao ler histórico:', e);
+function loadHistory(): HistoryItem[] {
+  try {
+    const stored = localStorage.getItem('spg_history');
+    if (!stored) return [];
+    const parsed: HistoryItem[] = JSON.parse(stored);
+    const cleaned = parsed.filter((item) => item.id !== LEGACY_SAMPLE_ID);
+    if (cleaned.length !== parsed.length) {
+      localStorage.setItem('spg_history', JSON.stringify(cleaned));
     }
-  }, []);
+    return cleaned;
+  } catch (e) {
+    console.error('Erro ao ler histórico:', e);
+    return [];
+  }
+}
+
+export function HistoryView({ onNavigateHome }: { onNavigateHome?: () => void }) {
+  // Inicializador preguiçoso: lê o localStorage uma única vez, já no primeiro render
+  const [history, setHistory] = useState<HistoryItem[]>(loadHistory);
 
   const handleClearHistory = () => {
     if (confirm('Tem certeza que deseja apagar todo o histórico de criações?')) {
