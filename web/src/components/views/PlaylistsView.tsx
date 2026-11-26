@@ -1,0 +1,571 @@
+import { useEffect, useState } from 'react';
+import { Music, Sparkles, Plus, ExternalLink, X, Search, Loader2, Image as ImageIcon } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { fetchAllUserPlaylists, enrichPlaylistTrackCounts, getPlaylistTrackCount, saveCustomPlaylistCover, getPlaylistCoverUrl } from '../../utils/spotifyPlaylists';
+import { API_BASE_URL } from '../../config';
+
+export function PlaylistsView({ token }: { token: string }) {
+  const [playlists, setPlaylists] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedPlaylist, setSelectedPlaylist] = useState<any | null>(null);
+  const [playlistTracks, setPlaylistTracks] = useState<any[]>([]);
+  const [loadingTracks, setLoadingTracks] = useState(false);
+
+  // Estados para expandir com IA
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiCount, setAiCount] = useState(10);
+  const [isExpandingAi, setIsExpandingAi] = useState(false);
+
+  // Estados para gerar/alterar capa com IA
+  const [coverPrompt, setCoverPrompt] = useState('');
+  const [isGeneratingCover, setIsGeneratingCover] = useState(false);
+
+  // Estados para busca manual
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [addingTrackUri, setAddingTrackUri] = useState<string | null>(null);
+
+  // Carregar todas as playlists paginadas e enriquecer contagem de músicas
+  const fetchPlaylists = async () => {
+    setLoading(true);
+    try {
+      const meRes = await fetch('https://api.spotify.com/v1/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!meRes.ok) {
+        throw new Error(`Spotify /me status ${meRes.status}`);
+      }
+      const userProfile = await meRes.json();
+
+      const userPlaylists = await fetchAllUserPlaylists(token, userProfile);
+      setPlaylists(userPlaylists);
+      setLoading(false);
+
+      // Em segundo plano, busca a quantidade real de faixas caso o Spotify retorne 0
+      enrichPlaylistTrackCounts(userPlaylists, token, (updatedList) => {
+        setPlaylists(updatedList);
+      });
+    } catch (err) {
+      console.error('Erro ao buscar playlists:', err);
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPlaylists();
+  }, [token]);
+
+  // Carregar faixas da playlist selecionada
+  const fetchTracks = (playlistId: string) => {
+    setLoadingTracks(true);
+    fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items?limit=50`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.items) {
+          setPlaylistTracks(data.items);
+          const totalCount = data.total ?? data.items.length;
+          setPlaylists((prev) =>
+            prev.map((p) =>
+              p.id === playlistId ? { ...p, tracks: { ...(p.tracks || {}), total: totalCount } } : p
+            )
+          );
+        }
+        setLoadingTracks(false);
+      })
+      .catch((err) => {
+        console.error('Erro ao buscar faixas:', err);
+        setLoadingTracks(false);
+      });
+  };
+
+  const handleOpenPlaylist = (pl: any) => {
+    setSelectedPlaylist(pl);
+    setAiPrompt('');
+    setCoverPrompt('');
+    setSearchQuery('');
+    setSearchResults([]);
+    fetchTracks(pl.id);
+  };
+
+  const handleCloseModal = () => {
+    setSelectedPlaylist(null);
+    setPlaylistTracks([]);
+  };
+
+  // Gerar/Alterar capa da playlist com IA
+  const handleGenerateAiCover = async () => {
+    if (!selectedPlaylist) return;
+    setIsGeneratingCover(true);
+
+    try {
+      const currentSongStrings = playlistTracks.slice(0, 12).map((i: any) => {
+        const track = i.item || i.track;
+        if (!track) return null;
+        return `"${track.name}" (${track.artists?.map((a: any) => a.name).join(', ')})`;
+      }).filter(Boolean);
+
+      const res = await fetch(`${API_BASE_URL}/api/playlist/cover-ai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playlistId: selectedPlaylist.id,
+          playlistName: selectedPlaylist.name,
+          playlistDesc: selectedPlaylist.description,
+          existingTracks: currentSongStrings,
+          prompt: coverPrompt.trim(),
+          token
+        })
+      });
+
+      const data = await res.json();
+      if (data.success && data.coverUrl) {
+        saveCustomPlaylistCover(selectedPlaylist.id, data.coverUrl);
+        setSelectedPlaylist((prev: any) =>
+          prev ? { ...prev, customCoverUrl: data.coverUrl, images: [{ url: data.coverUrl }] } : prev
+        );
+        setPlaylists((prev) =>
+          prev.map((p) =>
+            p.id === selectedPlaylist.id
+              ? { ...p, customCoverUrl: data.coverUrl, images: [{ url: data.coverUrl }] }
+              : p
+          )
+        );
+        setCoverPrompt('');
+        if (data.warning) {
+          toast(data.warning, { icon: '⚠️', duration: 6000 });
+        } else {
+          toast.success('Nova capa gerada com IA e aplicada na playlist!');
+        }
+      } else {
+        toast.error(data.error || 'Erro ao gerar capa com IA.');
+      }
+    } catch {
+      toast.error('Erro ao comunicar com o servidor.');
+    } finally {
+      setIsGeneratingCover(false);
+    }
+  };
+
+  // Expandir com IA
+  const handleExpandWithAi = async () => {
+    if (!selectedPlaylist) return;
+    setIsExpandingAi(true);
+
+    try {
+      const currentSongStrings = playlistTracks.slice(0, 25).map((i: any) => {
+        const track = i.item || i.track;
+        if (!track) return null;
+        return `"${track.name}" (${track.artists?.map((a: any) => a.name).join(', ')})`;
+      }).filter(Boolean);
+
+      const res = await fetch(`${API_BASE_URL}/api/playlist/append-ai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playlistId: selectedPlaylist.id,
+          playlistName: selectedPlaylist.name,
+          playlistDesc: selectedPlaylist.description,
+          existingTracks: currentSongStrings,
+          prompt: aiPrompt,
+          token,
+          trackCount: aiCount
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`${data.addedCount} novas músicas adicionadas pela IA!`);
+        setAiPrompt('');
+        fetchTracks(selectedPlaylist.id);
+        fetchPlaylists();
+      } else {
+        toast.error(data.error || 'Erro ao adicionar músicas com IA.');
+      }
+    } catch {
+      toast.error('Erro ao comunicar com o servidor.');
+    } finally {
+      setIsExpandingAi(false);
+    }
+  };
+
+  // Busca manual no Spotify
+  const handleSearchTracks = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+
+    setIsSearching(true);
+    try {
+      const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=5`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.tracks?.items) {
+        setSearchResults(data.tracks.items);
+      }
+    } catch (err) {
+      console.error('Erro na busca de faixas:', err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  // Adicionar faixa manual
+  const handleAddManualTrack = async (track: any) => {
+    if (!selectedPlaylist) return;
+    setAddingTrackUri(track.uri);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/playlist/append-track`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playlistId: selectedPlaylist.id,
+          uri: track.uri,
+          token
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`"${track.name}" adicionada!`);
+        fetchTracks(selectedPlaylist.id);
+        fetchPlaylists();
+      } else {
+        toast.error(data.error || 'Erro ao adicionar música.');
+      }
+    } catch {
+      toast.error('Erro ao conectar ao servidor.');
+    } finally {
+      setAddingTrackUri(null);
+    }
+  };
+
+  const formatDuration = (ms: number) => {
+    const minutes = Math.floor(ms / 60000);
+    const seconds = ((ms % 60000) / 1000).toFixed(0);
+    return `${minutes}:${Number(seconds) < 10 ? '0' : ''}${seconds}`;
+  };
+
+  return (
+    <main className="flex-1 h-full overflow-y-auto p-4 sm:p-6 md:p-10 bg-transparent text-white">
+      <div className="mb-6 sm:mb-8">
+        <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-1 sm:mb-2">Minhas Playlists</h2>
+        <p className="text-gray-400 text-sm sm:text-base md:text-lg">
+          Gerencie, gere capas com IA e adicione músicas às suas playlists existentes.
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="text-gray-400 flex items-center gap-2 text-sm sm:text-base">
+          <Loader2 className="animate-spin text-primary-purple" size={20} />
+          Carregando playlists...
+        </div>
+      ) : playlists.length === 0 ? (
+        <div className="text-gray-400 text-sm sm:text-base">Nenhuma playlist encontrada.</div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4 md:gap-6">
+          {playlists.map((pl, i) => {
+            const coverUrl = getPlaylistCoverUrl(pl);
+            return (
+              <div
+                key={pl.id || i}
+                onClick={() => handleOpenPlaylist(pl)}
+                className="bg-dark-surface p-3 sm:p-4 rounded-xl hover:bg-[#252033] border border-gray-800 hover:border-primary-purple/50 transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div>
+                  <div className="aspect-square bg-gray-800 rounded-lg mb-3 sm:mb-4 overflow-hidden flex items-center justify-center relative">
+                    {coverUrl ? (
+                      <img
+                        src={coverUrl}
+                        alt={pl.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                      />
+                    ) : (
+                      <Music size={32} className="text-gray-600 sm:w-10 sm:h-10" />
+                    )}
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <span className="text-xs bg-primary-purple font-bold px-3 py-1.5 rounded-full shadow-lg">
+                        Gerenciar
+                      </span>
+                    </div>
+                  </div>
+                  <h4 className="font-bold text-white text-xs sm:text-sm mb-0.5 sm:mb-1 truncate">{pl.name || 'Sem nome'}</h4>
+                  <p className="text-[11px] sm:text-xs text-gray-400">
+                    {getPlaylistTrackCount(pl)} músicas • {pl.public ? 'Pública' : 'Privada'}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Modal de Detalhes e Gerenciamento da Playlist */}
+      {selectedPlaylist && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">
+          <div className="bg-dark-surface border border-gray-700 w-full max-w-4xl max-h-[92vh] sm:max-h-[90vh] rounded-2xl flex flex-col overflow-hidden shadow-2xl">
+            {/* Cabeçalho do Modal */}
+            <div className="p-4 sm:p-6 border-b border-gray-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-dark-inner/50">
+              <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
+                <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-lg bg-gray-800 overflow-hidden flex-shrink-0 flex items-center justify-center relative">
+                  {getPlaylistCoverUrl(selectedPlaylist) ? (
+                    <img
+                      src={getPlaylistCoverUrl(selectedPlaylist)!}
+                      alt={selectedPlaylist.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <Music size={24} className="text-gray-500 sm:w-7 sm:h-7" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-lg sm:text-2xl font-bold text-white mb-0.5 sm:mb-1 truncate">{selectedPlaylist.name}</h3>
+                  <p className="text-xs sm:text-sm text-gray-400 truncate">
+                    {playlistTracks.length > 0 ? playlistTracks.length : getPlaylistTrackCount(selectedPlaylist)} faixas listadas • {selectedPlaylist.public ? 'Pública' : 'Privada'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 flex-shrink-0">
+                <a
+                  href={selectedPlaylist.external_urls?.spotify}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 sm:px-4 py-2 bg-spotify-green hover:bg-[#1ed760] text-black font-bold rounded-lg text-xs sm:text-sm flex items-center gap-1.5 transition-colors"
+                >
+                  <ExternalLink size={15} />
+                  Abrir no Spotify
+                </a>
+                <button
+                  onClick={handleCloseModal}
+                  className="p-1.5 sm:p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Conteúdo com Scroll */}
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-4 sm:space-y-6 flex-1">
+              {/* Bloco Novo: Alterar Capa da Playlist com IA */}
+              <div className="p-4 bg-dark-inner rounded-xl border border-primary-purple/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <ImageIcon className="text-primary-purple" size={18} />
+                    <h4 className="font-bold text-sm text-white">Alterar Imagem da Playlist com IA</h4>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-2.5">
+                    Descreva como quer a capa ou deixe em branco para gerar automaticamente com base no título <strong className="text-gray-300">"{selectedPlaylist.name}"</strong>.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={coverPrompt}
+                      onChange={(e) => setCoverPrompt(e.target.value)}
+                      placeholder={`Opcional: deixe vazio para usar "${selectedPlaylist.name}"...`}
+                      className="flex-1 bg-dark-surface border border-gray-700 rounded-lg px-3 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-primary-purple"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleGenerateAiCover}
+                      disabled={isGeneratingCover}
+                      className="bg-primary-purple hover:bg-opacity-90 disabled:bg-gray-700 text-white font-bold px-4 py-2 rounded-lg text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors flex-shrink-0 cursor-pointer"
+                    >
+                      {isGeneratingCover ? (
+                        <>
+                          <Loader2 className="animate-spin" size={15} />
+                          Gerando Capa...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={15} />
+                          {coverPrompt.trim() ? 'Gerar Capa com Prompt' : 'Gerar Capa pelo Título'}
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bloco 1: Ações de Adicionar Músicas */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Opção A: Expandir com IA */}
+                <div className="p-4 bg-dark-inner rounded-xl border border-gray-800 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Sparkles className="text-primary-purple" size={18} />
+                      <h4 className="font-bold text-sm">Expandir Playlist com IA</h4>
+                    </div>
+                    <p className="text-xs text-gray-400 mb-3">
+                      A IA gera e adiciona automaticamente novas músicas à playlist.
+                    </p>
+
+                    <input
+                      type="text"
+                      value={aiPrompt}
+                      onChange={(e) => setAiPrompt(e.target.value)}
+                      placeholder="Ex: mais músicas no mesmo ritmo, ou adicione rock clássico..."
+                      className="w-full bg-dark-surface border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-primary-purple mb-3"
+                    />
+
+                    <div className="flex items-center gap-2 mb-4 text-xs text-gray-400">
+                      <span>Adicionar:</span>
+                      {[5, 10, 15].map((cnt) => (
+                        <button
+                          key={cnt}
+                          type="button"
+                          onClick={() => setAiCount(cnt)}
+                          className={`px-2.5 py-1 rounded-md border ${
+                            aiCount === cnt
+                              ? 'bg-primary-purple border-primary-purple text-white font-bold'
+                              : 'bg-dark-surface border-gray-700 text-gray-400 hover:text-white'
+                          }`}
+                        >
+                          +{cnt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleExpandWithAi}
+                    disabled={isExpandingAi}
+                    className="w-full bg-primary-purple hover:bg-opacity-90 disabled:bg-gray-700 text-white font-bold py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors"
+                  >
+                    {isExpandingAi ? (
+                      <>
+                        <Loader2 className="animate-spin" size={16} />
+                        Gerando faixas com IA...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={16} />
+                        Adicionar com IA
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Opção B: Buscar música manual */}
+                <div className="p-4 bg-dark-inner rounded-xl border border-gray-800 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Search className="text-spotify-green" size={18} />
+                      <h4 className="font-bold text-sm">Buscar e Adicionar Música</h4>
+                    </div>
+                    <p className="text-xs text-gray-400 mb-3">
+                      Pesquise faixas específicas no catálogo do Spotify.
+                    </p>
+
+                    <form onSubmit={handleSearchTracks} className="flex gap-2 mb-3">
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Nome da música ou artista..."
+                        className="flex-1 bg-dark-surface border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-spotify-green"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isSearching || !searchQuery.trim()}
+                        className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm font-bold flex items-center gap-1 disabled:opacity-50"
+                      >
+                        {isSearching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                      </button>
+                    </form>
+
+                    {/* Resultados da busca */}
+                    {searchResults.length > 0 && (
+                      <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                        {searchResults.map((track) => (
+                          <div
+                            key={track.id}
+                            className="flex items-center justify-between p-2 bg-dark-surface rounded-lg text-xs"
+                          >
+                            <div className="truncate max-w-[200px]">
+                              <p className="font-bold truncate text-white">{track.name}</p>
+                              <p className="text-gray-400 truncate">
+                                {track.artists?.map((a: any) => a.name).join(', ')}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => handleAddManualTrack(track)}
+                              disabled={addingTrackUri === track.uri}
+                              className="px-2.5 py-1 bg-spotify-green hover:bg-[#1ed760] disabled:bg-gray-700 text-black font-bold rounded-md flex items-center gap-1"
+                            >
+                              {addingTrackUri === track.uri ? (
+                                <Loader2 size={12} className="animate-spin" />
+                              ) : (
+                                <Plus size={12} />
+                              )}
+                              Adicionar
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Bloco 2: Lista de Músicas Existentes */}
+              <div>
+                <h4 className="font-bold text-lg mb-3">Músicas na Playlist</h4>
+
+                {loadingTracks ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400 py-6">
+                    <Loader2 size={16} className="animate-spin text-primary-purple" />
+                    Carregando faixas da playlist...
+                  </div>
+                ) : playlistTracks.length === 0 ? (
+                  <p className="text-sm text-gray-400 py-4">Nenhuma música encontrada nesta playlist.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {playlistTracks.map((item, idx) => {
+                      const track = item.item || item.track;
+                      if (!track) return null;
+                      return (
+                        <div
+                          key={track.id || idx}
+                          className="flex items-center justify-between p-2 sm:p-2.5 rounded-lg hover:bg-dark-inner transition-colors text-xs sm:text-sm"
+                        >
+                          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 pr-2">
+                            <span className="text-gray-500 text-xs w-4 sm:w-5 text-right flex-shrink-0">{idx + 1}</span>
+                            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded bg-gray-800 flex-shrink-0 overflow-hidden flex items-center justify-center">
+                              {track.album?.images && track.album.images.length > 0 ? (
+                                <img
+                                  src={track.album.images[0].url}
+                                  alt={track.name}
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <Music size={16} className="text-gray-600 sm:w-4 sm:h-4" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-bold text-white text-xs sm:text-sm truncate">{track.name}</p>
+                              <p className="text-[11px] sm:text-xs text-gray-400 truncate">
+                                {track.artists?.map((a: any) => a.name).join(', ')}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="text-[11px] sm:text-xs text-gray-400 flex-shrink-0 font-mono">
+                            {formatDuration(track.duration_ms || 0)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
