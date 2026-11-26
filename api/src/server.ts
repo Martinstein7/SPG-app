@@ -2,7 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import axios from 'axios';
-import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
+import OpenAI from 'openai';
 
 dotenv.config();
 
@@ -22,7 +23,8 @@ const FRONTEND_URL = rawFrontendUrl.startsWith('http://') || rawFrontendUrl.star
   : `https://${rawFrontendUrl}`;
 
 // Instancia do Gemini
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// Só passa apiKey quando existe (com exactOptionalPropertyTypes, "undefined" explícito não é aceito)
+const ai = new GoogleGenAI(process.env.GEMINI_API_KEY ? { apiKey: process.env.GEMINI_API_KEY } : {});
 
 app.get('/', (req, res) => {
   res.send('SPG Backend is running!');
@@ -117,7 +119,6 @@ async function generateAndUploadPlaylistCover(
   try {
     const promptInstruction = `Transforme este tema de playlist musical em uma descrição visual curta em inglês (máximo 18 palavras) para uma capa de álbum artística, sem textos nem palavras escritas na imagem. Tema: "${cleanTheme}". Responda APENAS a frase em inglês.`;
     if (process.env.GROQ_API_KEY) {
-      const { OpenAI } = require('openai');
       const groq = new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" });
       const groqRes = await groq.chat.completions.create({
         model: "openai/gpt-oss-20b",
@@ -233,7 +234,6 @@ app.post('/api/generate', async (req, res) => {
       console.error("Gemini falhou, iniciando plano B (Groq)...", geminiError.message);
       try {
         if (!process.env.GROQ_API_KEY) throw new Error("Sem chave Groq");
-        const { OpenAI } = require('openai');
         const groq = new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" });
         const groqResponse = await groq.chat.completions.create({
           model: "openai/gpt-oss-20b",
@@ -243,11 +243,10 @@ app.post('/api/generate', async (req, res) => {
           ],
           temperature: 0.7
         });
-        geminiOutput = groqResponse.choices[0].message.content || "";
+        geminiOutput = groqResponse.choices[0]?.message?.content || "";
       } catch (groqError: any) {
         console.error("Groq falhou, iniciando plano C (OpenAI)...", groqError.message);
         if (!process.env.OPENAI_API_KEY) throw new Error("Todas IAs falharam.");
-        const { OpenAI } = require('openai');
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
         const gptResponse = await openai.chat.completions.create({
           model: "gpt-3.5-turbo",
@@ -257,7 +256,7 @@ app.post('/api/generate', async (req, res) => {
           ],
           temperature: 0.7
         });
-        geminiOutput = gptResponse.choices[0].message.content || "";
+        geminiOutput = gptResponse.choices[0]?.message?.content || "";
       }
     }
 
@@ -375,7 +374,6 @@ app.get('/api/suggestions', async (req, res) => {
       console.error("Tentando com Groq...");
       try {
         if (!process.env.GROQ_API_KEY) throw new Error("Sem chave Groq");
-        const { OpenAI } = require('openai');
         const groq = new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" });
         const groqResponse = await groq.chat.completions.create({
           model: "openai/gpt-oss-20b",
@@ -384,11 +382,10 @@ app.get('/api/suggestions', async (req, res) => {
           ],
           temperature: 0.9
         });
-        aiOutput = groqResponse.choices[0].message.content || "";
+        aiOutput = groqResponse.choices[0]?.message?.content || "";
       } catch (groqError: any) {
         console.error("Groq falhou, tentando OpenAI...", groqError.message);
         if (!process.env.OPENAI_API_KEY) throw new Error("Sem chaves de IA");
-        const { OpenAI } = require('openai');
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
         const gptResponse = await openai.chat.completions.create({
           model: "gpt-3.5-turbo",
@@ -397,7 +394,7 @@ app.get('/api/suggestions', async (req, res) => {
           ],
           temperature: 0.9
         });
-        aiOutput = gptResponse.choices[0].message.content || "";
+        aiOutput = gptResponse.choices[0]?.message?.content || "";
       }
     }
     
@@ -493,7 +490,6 @@ REGRAS OBRIGATÓRIAS E CRÍTICAS:
       console.error("Gemini falhou na adição, usando Groq...", geminiError.message);
       if (process.env.GROQ_API_KEY) {
         try {
-          const { OpenAI } = require('openai');
           const groq = new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" });
           const groqResponse = await groq.chat.completions.create({
             model: "openai/gpt-oss-20b",
