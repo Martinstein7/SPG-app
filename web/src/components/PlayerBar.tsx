@@ -165,12 +165,16 @@ export function PlayerBar({ token }: PlayerBarProps) {
       <div className="flex items-center gap-2.5 md:gap-4 flex-1 md:flex-initial md:w-1/4 md:min-w-[200px] min-w-0 pr-2">
         {currentTrack ? (
           <>
-            <div className="relative group w-11 h-11 md:w-14 md:h-14 rounded-lg overflow-hidden flex-shrink-0 bg-gray-800 border border-gray-700">
-              <img
-                src={currentTrack.album?.images?.[0]?.url || 'https://via.placeholder.com/64'}
-                alt={currentTrack.name}
-                className="w-full h-full object-cover"
-              />
+            <div className="relative group w-11 h-11 md:w-14 md:h-14 rounded-lg overflow-hidden flex-shrink-0 bg-gray-800 border border-gray-700 flex items-center justify-center">
+              {currentTrack.album?.images?.[0]?.url ? (
+                <img
+                  src={currentTrack.album.images[0].url}
+                  alt={currentTrack.name}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <Music2 size={18} className="text-gray-500" />
+              )}
               {currentTrack.external_urls?.spotify && (
                 <a
                   href={currentTrack.external_urls.spotify}

@@ -10,7 +10,6 @@ import { MobileHeader } from './components/MobileHeader';
 import { ListMusic, AlertTriangle, LogOut, RefreshCw } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
 import { API_BASE_URL } from './config';
-import './App.css';
 
 function App() {
   const [token, setToken] = useState<string | null>(null);

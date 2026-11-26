@@ -278,7 +278,7 @@ export function MainContent({ token }: { token: string }) {
       {/* Sua Playlists */}
       <div className="mb-12">
         <div className="flex items-center justify-between mb-4 sm:mb-6">
-          <h3 className="text-xl sm:text-2xl font-bold">Sua Playlists</h3>
+          <h3 className="text-xl sm:text-2xl font-bold">Suas Playlists</h3>
           <a href={profile?.external_urls?.spotify} target="_blank" className="text-xs sm:text-sm text-spotify-green hover:underline transition-colors flex items-center gap-1">
             Abrir Spotify &rarr;
           </a>
